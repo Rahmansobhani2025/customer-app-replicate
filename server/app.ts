@@ -59,6 +59,159 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "healthy", timestamp: new Date().toISOString() });
 });
 
+app.post("/api/try-on", async (req, res) => {
+  const { faceImageData, frameImageUrl } = req.body ?? {};
+  const replicateToken = process.env.REPLICATE_API_TOKEN;
+
+  if (!replicateToken) {
+    return res.status(503).json({ error: "Virtual try-on is not configured. Add REPLICATE_API_TOKEN to the server environment." });
+  }
+  if (
+    typeof faceImageData !== "string" ||
+    faceImageData.length > 4_000_000 ||
+    !/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/.test(faceImageData)
+  ) {
+    return res.status(400).json({ error: "A valid face image is required." });
+  }
+  if (typeof frameImageUrl !== "string") {
+    return res.status(400).json({ error: "A frame image is required." });
+  }
+
+  let parsedFrameUrl: URL;
+  try {
+    parsedFrameUrl = new URL(frameImageUrl);
+  } catch {
+    return res.status(400).json({ error: "The frame image URL is invalid." });
+  }
+  if (parsedFrameUrl.protocol !== "https:" || parsedFrameUrl.username || parsedFrameUrl.password) {
+    return res.status(400).json({ error: "The frame image must use a secure HTTPS URL." });
+  }
+
+  try {
+    const response = await fetch("https://api.replicate.com/v1/models/google/nano-banana/predictions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${replicateToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        input: {
+          prompt: "Create a realistic virtual eyeglasses try-on. Image 1 is the person's face; preserve their identity, facial features, expression, skin tone, hair, and background. Image 2 is the exact eyeglasses product to place naturally on their face. Fit the glasses over the eyes with realistic scale, perspective, reflections, and shadows. Do not change anything else.",
+          image_input: [faceImageData, frameImageUrl],
+          output_format: "jpg",
+        },
+      }),
+    });
+
+    const prediction = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("Replicate try-on request failed:", response.status, prediction);
+      return res.status(502).json({ error: "Replicate could not start the virtual try-on. Check the API token and try again." });
+    }
+
+    return res.status(202).json({
+      id: prediction.id,
+      status: prediction.status,
+    });
+  } catch (error) {
+    console.error("Failed to start Replicate try-on:", error);
+    return res.status(502).json({ error: "Could not connect to Replicate. Please try again." });
+  }
+});
+
+app.get("/api/try-on/:predictionId", async (req, res) => {
+  const replicateToken = process.env.REPLICATE_API_TOKEN;
+  const { predictionId } = req.params;
+
+  if (!replicateToken) {
+    return res.status(503).json({ error: "Virtual try-on is not configured. Add REPLICATE_API_TOKEN to the server environment." });
+  }
+  if (!/^[a-f0-9-]{20,}$/i.test(predictionId)) {
+    return res.status(400).json({ error: "The prediction ID is invalid." });
+  }
+
+  try {
+    const response = await fetch(`https://api.replicate.com/v1/predictions/${encodeURIComponent(predictionId)}`, {
+      headers: { Authorization: `Bearer ${replicateToken}` },
+    });
+    const prediction = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.error("Replicate try-on status request failed:", response.status, prediction);
+      return res.status(502).json({ error: "Could not retrieve the virtual try-on status." });
+    }
+
+    return res.json({
+      status: prediction.status,
+      output: prediction.output,
+      error: prediction.error,
+    });
+  } catch (error) {
+    console.error("Failed to retrieve Replicate try-on status:", error);
+    return res.status(502).json({ error: "Could not connect to Replicate. Please try again." });
+  }
+});
+
+app.get("/api/try-on/:predictionId/download", async (req, res) => {
+  const replicateToken = process.env.REPLICATE_API_TOKEN;
+  const { predictionId } = req.params;
+
+  if (!replicateToken) {
+    return res.status(503).json({ error: "Virtual try-on is not configured. Add REPLICATE_API_TOKEN to the server environment." });
+  }
+  if (!/^[a-f0-9-]{20,}$/i.test(predictionId)) {
+    return res.status(400).json({ error: "The prediction ID is invalid." });
+  }
+
+  try {
+    const predictionResponse = await fetch(`https://api.replicate.com/v1/predictions/${encodeURIComponent(predictionId)}`, {
+      headers: { Authorization: `Bearer ${replicateToken}` },
+    });
+    const prediction = await predictionResponse.json().catch(() => ({}));
+    if (!predictionResponse.ok) {
+      console.error("Replicate download lookup failed:", predictionResponse.status, prediction);
+      return res.status(502).json({ error: "Could not retrieve the virtual try-on image." });
+    }
+    if (prediction.status !== "succeeded") {
+      return res.status(409).json({ error: "The virtual try-on image is not ready to download." });
+    }
+
+    const output = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+    if (typeof output !== "string") {
+      return res.status(502).json({ error: "Replicate did not return a downloadable image." });
+    }
+    const outputUrl = new URL(output);
+    if (
+      outputUrl.protocol !== "https:" ||
+      !(outputUrl.hostname === "replicate.delivery" || outputUrl.hostname.endsWith(".replicate.delivery"))
+    ) {
+      return res.status(502).json({ error: "Replicate returned an unsupported image location." });
+    }
+
+    const imageResponse = await fetch(outputUrl);
+    if (!imageResponse.ok) {
+      return res.status(502).json({ error: "Could not download the generated image from Replicate." });
+    }
+    const contentType = (imageResponse.headers.get("content-type") || "").split(";")[0].toLowerCase();
+    const extension = contentType === "image/jpeg" ? "jpg" : contentType === "image/webp" ? "webp" : "png";
+    if (!["image/jpeg", "image/png", "image/webp"].includes(contentType)) {
+      return res.status(502).json({ error: "Replicate returned an unsupported image format." });
+    }
+
+    const imageData = await imageResponse.arrayBuffer();
+    if (imageData.byteLength > 20 * 1024 * 1024) {
+      return res.status(502).json({ error: "The generated image is too large to download." });
+    }
+
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Content-Disposition", `attachment; filename="envision-virtual-try-on.${extension}"`);
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(Buffer.from(imageData));
+  } catch (error) {
+    console.error("Failed to download Replicate try-on image:", error);
+    return res.status(502).json({ error: "Could not download the virtual try-on image. Please try again." });
+  }
+});
+
 // Primary end-to-end full-stack AI user experience endpoint
 app.post("/api/analyze", async (req, res) => {
   const { 

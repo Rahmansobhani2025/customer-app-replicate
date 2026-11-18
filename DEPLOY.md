@@ -25,6 +25,7 @@ git push -u origin main
    | Name | Value |
    |---|---|
    | `GEMINI_API_KEY` | your Gemini key (server-side only) |
+   | `REPLICATE_API_TOKEN` | your Replicate API token (server-side only; used for virtual try-on) |
    | `VITE_SUPABASE_URL` | Supabase project URL |
    | `VITE_SUPABASE_ANON_KEY` | Supabase anon (public) key |
    | `VITE_BASE_DOMAIN` | `envisioneyewear.store` |

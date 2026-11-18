@@ -60,6 +60,7 @@ import { claimShopForCurrentUser, formatShopAddress } from "./lib/shop";
 import { loadShopInventory, pickBestMediaUrl } from "./lib/inventory";
 import { rankFramesForFace } from "./lib/matching";
 import { shrinkDataUrl } from "./lib/imageUpload";
+import { DEMO_FACE_IMAGE } from "./data/tryOnDemo";
 
 
 export default function App() {
@@ -293,6 +294,20 @@ export default function App() {
       left: allFrames[allFrames.length - 1] || null
     });
     fetchAndMatchEyeglass(results.faceShape);
+  };
+
+  const openTryOnDemo = () => {
+    handleScannerComplete({
+      ipd: "64",
+      faceShape: "Oval",
+      symmetry: "0.98",
+      styleRecommendation: "A sample profile for previewing the virtual try-on interface.",
+      bridgeWidth: "18.5mm",
+      preferredStyle: "Classic Modern",
+      centerFrameData: DEMO_FACE_IMAGE,
+      allFrames: [DEMO_FACE_IMAGE, DEMO_FACE_IMAGE, DEMO_FACE_IMAGE],
+    });
+    setCurrentStep(3);
   };
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -1347,6 +1362,23 @@ export default function App() {
                   ? "نطابق شكل وجهك، قياساتك، ونشاطك اليومي لنختار لك نظارات تبدو رائعة ومريحة تماماً."
                   : "We match your face shape, measurements, and daily activities to find glasses that look great and feel comfortable."}
               </p>
+              {isDemo && (
+                <div className="mx-auto mt-5 max-w-lg rounded-xl border border-blue-200 bg-blue-50 p-4 text-start">
+                  <p className="text-sm text-blue-950">
+                    {isArabic
+                      ? "شاهد معاينة افتراضية باستخدام وجه توضيحي. هذا العرض لا يرسل صوراً ولا يستدعي Replicate."
+                      : "Preview the try-on with an illustrated sample face. This demo sends no images and does not call Replicate."}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={openTryOnDemo}
+                    className="mt-3 inline-flex items-center gap-2 rounded-lg bg-blue-900 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-blue-800"
+                  >
+                    <Sparkles className="h-4 w-4" />
+                    {isArabic ? "عرض تجربة النظارات التوضيحية" : "Preview no-cost try-on demo"}
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Large Grid of Selection Cards (6 options) */}
@@ -1938,6 +1970,7 @@ export default function App() {
               <DatabaseTryOnSuite
                 analysisResult={analysisResult}
                 isArabic={isArabic}
+                isDemo={isDemo}
                 capturedFrames={capturedFrames}
                 setCurrentStep={setCurrentStep}
                 selectedProductIndex={selectedProductIndex}

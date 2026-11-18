@@ -32,11 +32,19 @@ import FunnelTrustBadges from "./FunnelTrustBadges";
 import { useShop } from "../context/ShopContext";
 import { loadShopInventory, pickBestMediaUrl } from "../lib/inventory";
 import { rankFramesForFace } from "../lib/matching";
+import { createDemoTryOnImage, DEMO_ACTIVITY_LABELS } from "../data/tryOnDemo";
 
+interface TryOnPreview {
+  imageUrl: string;
+  downloadUrl?: string;
+  frameName: string;
+  activityLabel?: string;
+}
 
 interface DatabaseTryOnSuiteProps {
   analysisResult: BiometricAnalysisResult;
   isArabic: boolean;
+  isDemo: boolean;
   capturedFrames: {
     center: string | null;
     right: string | null;
@@ -67,6 +75,7 @@ interface DatabaseTryOnSuiteProps {
 export default function DatabaseTryOnSuite({
   analysisResult,
   isArabic,
+  isDemo,
   capturedFrames,
   setCurrentStep,
   selectedProductIndex,
@@ -85,6 +94,9 @@ export default function DatabaseTryOnSuite({
   const [matchedEyeglass, setMatchedEyeglass] = useState<any | null>(null);
   const [matchedMediaUrl, setMatchedMediaUrl] = useState<string | null>(null);
   const [isImageModalOpen, setIsImageModalOpen] = useState<boolean>(false);
+  const [isGeneratingTryOn, setIsGeneratingTryOn] = useState(false);
+  const [tryOnPreviews, setTryOnPreviews] = useState<TryOnPreview[]>([]);
+  const [tryOnError, setTryOnError] = useState<string | null>(null);
 
   // Funnel selections
   const [lensType, setLensType] = useState<LensTypeOption>("single_vision");
@@ -136,12 +148,95 @@ export default function DatabaseTryOnSuite({
   };
 
   const handleSelectEyeglass = (item: any) => {
+    if (isGeneratingTryOn) return;
     setMatchedEyeglass(item);
     setMatchedMediaUrl(pickBestMediaUrl(dbInventoryMedia, item.id));
+    setTryOnPreviews([]);
+    setTryOnError(null);
   };
 
   const getMediaForItem = (itemId: number) => {
     return pickBestMediaUrl(dbInventoryMedia, itemId);
+  };
+
+  const generateVirtualTryOn = async () => {
+    if (!capturedFrames.center || !matchedMediaUrl) return;
+
+    setIsGeneratingTryOn(true);
+    setTryOnError(null);
+    setTryOnPreviews([]);
+
+    try {
+      if (isDemo) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        const frames = [
+          matchedEyeglass,
+          ...dbInventory.filter((frame) => frame.id !== matchedEyeglass?.id),
+        ].filter(Boolean).slice(0, 3);
+        const selectedActivities = [...new Set([...lifestyleFocus, ...lifestyleLeisure])]
+          .filter((activity) => activity in DEMO_ACTIVITY_LABELS);
+        const activities = selectedActivities.length > 0 ? selectedActivities : ["digital"];
+
+        setTryOnPreviews(frames.map((frame, index) => {
+          const activity = activities[index % activities.length];
+          const labels = DEMO_ACTIVITY_LABELS[activity];
+          return {
+            imageUrl: createDemoTryOnImage(activity, frame.shapeCategory || frame.model_name || "", index),
+            frameName: frame.frame_name || frame.model_name || "Eyewear frame",
+            activityLabel: isArabic ? labels.ar : labels.en,
+          };
+        }));
+        return;
+      }
+
+      const startResponse = await fetch("/api/try-on", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          faceImageData: capturedFrames.center,
+          frameImageUrl: matchedMediaUrl,
+        }),
+      });
+      const prediction = await startResponse.json().catch(() => ({}));
+      if (!startResponse.ok) {
+        throw new Error(prediction.error || `Try-on request failed (${startResponse.status}).`);
+      }
+      if (!prediction.id) {
+        throw new Error("Replicate did not return a prediction ID.");
+      }
+
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        if (prediction.status === "succeeded") {
+          const output = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+          if (typeof output !== "string") throw new Error("Replicate did not return an image.");
+          setTryOnPreviews([{
+            imageUrl: output,
+            downloadUrl: `/api/try-on/${encodeURIComponent(prediction.id)}/download`,
+            frameName: matchedEyeglass.frame_name || matchedEyeglass.model_name || "Eyewear frame",
+          }]);
+          return;
+        }
+        if (prediction.status === "failed" || prediction.status === "canceled") {
+          throw new Error(prediction.error || "Replicate could not generate the try-on image.");
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const statusResponse = await fetch(`/api/try-on/${encodeURIComponent(prediction.id)}`);
+        const status = await statusResponse.json().catch(() => ({}));
+        if (!statusResponse.ok) {
+          throw new Error(status.error || `Could not check try-on status (${statusResponse.status}).`);
+        }
+        prediction.status = status.status;
+        prediction.output = status.output;
+        prediction.error = status.error;
+      }
+
+      throw new Error("Image generation is taking longer than expected. Please try again.");
+    } catch (error) {
+      setTryOnError(error instanceof Error ? error.message : "Could not generate the try-on image.");
+    } finally {
+      setIsGeneratingTryOn(false);
+    }
   };
 
   useEffect(() => {
@@ -320,6 +415,84 @@ export default function DatabaseTryOnSuite({
                   </span>
                 )}
               </div>
+            </div>
+
+            <div className="space-y-4 rounded-lg border border-brand-gold/20 bg-[#101010] p-5">
+              <div>
+                <h5 className="font-serif text-lg text-white">
+                  {isDemo
+                    ? (isArabic ? "ثلاث معاينات للنظارات حسب أنشطتك" : "Three Frame Looks for Your Activities")
+                    : (isArabic ? "جرّب الإطار على وجهك" : "See These Glasses on Your Face")}
+                </h5>
+                <p className="mt-1 text-xs leading-relaxed text-zinc-400">
+                  {isDemo
+                    ? (isArabic
+                      ? "هذا العرض يستخدم رسماً توضيحياً فقط. لا تُرسل صور ولا يتم الاتصال بـ Replicate."
+                      : "This demo uses an illustration only. No images are sent and Replicate is not called.")
+                    : isArabic
+                    ? "سنرسل صورة وجهك وإطار النظارة المحدد إلى Replicate لإنشاء معاينة افتراضية. لن تُرسل الصورة إلا عند الضغط على الزر."
+                    : "Your face photo and the selected frame image will be sent to Replicate to create a virtual preview. Nothing is sent until you click the button."}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={generateVirtualTryOn}
+                disabled={!capturedFrames.center || !matchedMediaUrl || isGeneratingTryOn}
+                className="inline-flex items-center justify-center gap-2 rounded-lg bg-brand-gold px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-brand-gold/90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isGeneratingTryOn ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                ) : (
+                  <Camera className="h-4 w-4" />
+                )}
+                {isGeneratingTryOn
+                  ? (isArabic ? "جارٍ إنشاء المعاينة..." : "Generating try-on...")
+                  : isDemo
+                    ? (isArabic ? "اعرض المعاينات الثلاث" : "Show 3 demo previews")
+                    : (isArabic ? "أنشئ معاينة افتراضية" : "Generate Virtual Try-On")}
+              </button>
+              {!capturedFrames.center && (
+                <p className="text-xs text-amber-300">
+                  {isArabic ? "أكمل مسح الوجه أولاً لالتقاط صورتك." : "Complete the face scan first to capture your photo."}
+                </p>
+              )}
+              {tryOnError && <p role="alert" className="text-sm text-red-400">{tryOnError}</p>}
+              {tryOnPreviews.length > 0 && (
+                <div className={`grid gap-4 ${isDemo ? "grid-cols-3" : "grid-cols-1"}`}>
+                  {tryOnPreviews.map((preview, index) => (
+                    <div key={`${preview.frameName}-${index}`} className="space-y-3">
+                      <img
+                        src={preview.imageUrl}
+                        alt={isArabic
+                          ? `${preview.frameName} على الوجه في خلفية ${preview.activityLabel || ""}`
+                          : `${preview.frameName} try-on in a ${preview.activityLabel || ""} setting`}
+                        className="mx-auto max-h-[420px] w-full rounded-lg border border-white/10 object-contain"
+                      />
+                      <div className="space-y-1">
+                        <p className="font-serif text-sm text-white">{preview.frameName}</p>
+                        {preview.activityLabel && <p className="text-xs text-brand-gold">{preview.activityLabel}</p>}
+                      </div>
+                      <a
+                        href={preview.downloadUrl || preview.imageUrl}
+                        download={`envision-virtual-try-on-${index + 1}.${isDemo ? "svg" : "jpg"}`}
+                        className="inline-flex items-center gap-2 text-sm text-brand-gold underline underline-offset-4"
+                      >
+                        <Download className="h-4 w-4" />
+                        {isArabic ? "تنزيل الصورة" : "Download image"}
+                      </a>
+                    </div>
+                  ))}
+                  <p className={`text-xs text-zinc-500 ${isDemo ? "col-span-3" : ""}`}>
+                    {isDemo
+                      ? (isArabic
+                        ? "هذه صور توضيحية فقط؛ لا تمثل نتائج حقيقية مولّدة بالذكاء الاصطناعي."
+                        : "Illustrative mock previews only; these are not real AI-generated results.")
+                      : isArabic
+                      ? "هذه معاينة مولّدة بالذكاء الاصطناعي ولا تضمن دقة المقاس أو الملاءمة."
+                      : "AI-generated preview only; fit and sizing are not guaranteed."}
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Suitability Report */}

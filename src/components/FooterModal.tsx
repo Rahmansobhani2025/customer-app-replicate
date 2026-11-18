@@ -31,10 +31,10 @@ export default function FooterModal({ isOpen, type, onClose, isArabic }: FooterM
                 : "When you perform the face analysis, our custom 3D high-resolution scanner captures your facial feature ratios, interpupillary distance (PD), and facial landmarks. This data is converted immediately into anonymous math vectors (numerical matrices)."
             },
             {
-              title: isArabic ? "عدم تخزين الصور على السحابة" : "Zero Image Storage on Cloud",
+              title: isArabic ? "المعالجة المؤقتة للصور" : "Cloud Image Processing",
               content: isArabic
-                ? "لقطات الكاميرا المباشرة وتغذية الفيديو لا تغادر جهازك المحلي أبداً. يتم معالجة بكسلات الفيديو الفعلية بنسبة ١٠٠٪ على الجهاز في الوقت الفعلي، وتُستخدم فقط المعلمات الرقمية المستخرجة لتخصيص النظارات."
-                : "Your live camera images/video feed never leave your local device. The actual video frame pixels are processed 100% on-device in real-time, and only the derived numerical parameters are used to customize your eyewear."
+                ? "تُرسل صور الوجه إلى Gemini لتحليل المسح، ولا تُرسل صورة الوجه وصورة الإطار المحدد إلى Replicate إلا عند طلب معاينة افتراضية. لا يحفظ التطبيق صور الوجه في قاعدة بياناته؛ ويخضع التعامل مع الصور والاحتفاظ بها لسياسات مزودي الخدمة."
+                : "Face images are sent to Gemini for scan analysis. Your face photo and selected frame image are sent to Replicate only when you request a virtual try-on. The app does not save face photos in its database; image handling and retention are subject to the providers' policies."
             },
             {
               title: isArabic ? "قبو Supabase الآمن وتشفير البيانات" : "Private Supabase Vault & Encryption",
